@@ -1,0 +1,251 @@
+---
+title: "Cleveland Heart Disease Classification - KNN"
+author: "Nicolas Picazo"
+date: "2022-09-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Heart Disease Classification
+
+In this project, we use data heart disease data taken from the UCI data website to identify whether or not an individual has heart disease. The data contains 14 attributes that describe biomarker measurements about the person such as age, sex, resting blood pressure and serum cholesterol levels.
+
+We will train a K-Near-Neighbors model using this data to classify heart disease. First, we do data exploration to understand the data. We then process the set so that it can be used to train and test the KNN model.
+
+```{r Libraries}
+library(DataExplorer)
+library(lattice)
+library(ggplot2)
+library(caret)
+library(class)
+library(gmodels)
+library(dplyr)
+```
+
+## Uploading Data
+
+The dataset is uploaded from local and attribute names are added.
+
+```{r Data}
+#uploading set from local
+clev <- read.csv(file.choose(), header = T)
+
+#adding attribute names
+colnames(clev) <- c("age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal","num")
+```
+
+## Data Processing and Exploration
+
+We explore the dataset to understand some of its qualities. We first preview the set and its data types. Then we calculate the statistics and visualise the attribute's distributions, data structure and correlations.
+
+```{r Data Exploration}
+#dataset structure
+str(clev)
+
+#diplaying first 5 data points
+head(clev, n = 5)
+```
+
+The dataset contains 302 observations with 14 attributes. Most attributes are numerical except ca and thal which are characters.
+
+The attribute descriptions can be found on the UCI website.
+
+### Data Summary (Statistics)
+
+```{r Summary}
+#summary
+summary(clev)
+```
+
+The individuals in the dataset have an average age of 54 years. The youngest age is 29 and oldest is 77. The sex attribute is set up by 0 and 1, the male is set to 1 and female is 0. The average calculated in the sex attribute is greater than .5 which means there are more males than females in the dataset.
+
+```{r Visualization}
+#histogram
+plot_histogram(clev)
+
+#density plot (distribution)
+plot_density(clev)
+
+#correlation matrix
+plot_correlation(clev)
+```
+
+The serum cholesterol distribution has its peak around 250 mg/dl which is considered a high cholesterol level.
+
+The majority of the individuals have asymptomatic chest pain followed by non-anginal pain, atypical angina and typical angina.
+
+There are some attributes that have a large range compared to others, since KNN makes use of distance, we will normalize those attributes to balance the attribute influence. The attributes that need normalization are columns 1, 4, 5, 8 and 10 (age, trestbps, chol, thalach and oldpeak). Columns 3, 7, 11, 12 and 13 (cp, restecg, slope, ca and thal) are categorical so they will be converted to factors and then dummy variables.
+
+### Missing Values, Normalization and Factorization
+
+The function summary() did not indicate there are missing values but we double check.
+
+```{r Missing Values 1}
+#sum of missing values
+sum(is.na(clev))
+```
+
+There are no missing values in the form of NA or other but there are missing values in the form of a character question mark within the ca and thal variables. Using the dplyr library, the data points that include the missing values are removed since there are only 6 data points that have missing values out of 302.
+
+```{r Missing Values 2}
+#missing values in the form of a question mark
+clev %>% filter_all(any_vars(. %in% c('?')))
+
+#subset containing missing values
+qm_subset <- clev %>% filter_all(any_vars(. %in% c('?')))
+
+#creating subset without missing values
+clev_nm <- anti_join(clev, qm_subset)
+
+#printing new subset
+str(clev_nm)
+
+#double check missing values of new subset
+clev_nm %>% filter_all(any_vars(. %in% c('?')))
+```
+
+The missing values have been excluded from the new dataset. Now we normalize the variables with large ranges using a defined normalize function.
+
+The function to normalize the variables is defined as:
+
+$N(x) = \frac{x - min(x)}{max(x) - min(x)}$
+
+```{r Normalize}
+#defining normalize function
+normalize <- function(x) {
+  return( (x - min(x)) / (max(x) - min(x)))
+}
+
+#creating normalized subset
+clev_norm <- as.data.frame(lapply(clev_nm[, c(1, 4, 5, 8, 10)], normalize))
+
+#normalized stats
+summary(clev_norm)
+```
+
+The select attributes now have a range comparable to the rest of the attributes.
+
+Next, the categorical attributes are converted to factors and then to dummy variables.
+
+```{r Dummy Variables}
+#factorization
+clev_var <- as.data.frame(lapply(clev_nm[, c(3, 7, 11:13)], as.factor))
+
+#viewing factor variables
+str(clev_var)
+
+#creating dummy variables
+dummy <- dummyVars(~., data = clev_var, fullRank = T)
+
+clev_dummy <- as.data.frame(predict(dummy, newdata = clev_var))
+
+str(clev_dummy)
+```
+
+The num variable (heart disease diagnosis) has 4 levels (1, 2, 3 and 4) where only 1 to 4 is the presence of heart disease. We simplify the variables by changing the levels to 0 and 1 (absence and presence).
+
+```{r Num Change}
+#changing converting values greater than 1 to 1 in num variable
+clev_nm$num <- with(clev_nm, ifelse(num >= 1, 1, 0))
+
+#factorizing new num variable
+clev_nm$num <- as.factor(clev_nm$num)
+
+#comparing num attributes from original set and converted set
+head(clev$num, n = 10)
+
+head(clev_nm$num, n = 10)
+
+str(clev_nm$num)
+```
+
+The num attribute has now been changed from a 0 to 4 range of values to 0 and 1 and converted to a factor type. The attributes with a larger range have been normalized. The categorical variables have been converted to factors as well. The processed attributes and the remaining attributes from the original set are now combined into a processed set to be used in building the KNN model. The attributes to be combined are the dummy variables (age, trestbps, chol, thalach and oldpeak), normalized variables (cp, restecg, slope, thal and ca), sex and fbs from the cleaned set (no missing), and the cleaned and factorized num variable.
+
+```{r Combining Attributes}
+#combining attributes
+clev_processed <- cbind(clev_dummy, clev_norm, clev_nm$sex, clev_nm$fbs, clev_nm$num)
+
+#viewing processed set
+str(clev_processed)
+```
+
+## Building KNN Model
+
+The first model will be built using K = 1 (single nearest neighbor) and will be evaluated in its performance. Then a loop will be created to identify the k value that will produce the best performance.
+
+A seed is set for reproducibility.
+
+```{r Set Seed}
+set.seed(44)
+```
+
+Training and testing subsets and labels are produced from the processed dataset using a 70/30 split.
+
+```{r Train and Test Subsets}
+#index
+idx <- sample(2, nrow(clev_processed), replace = T, prob = c(0.7, 0.3))
+
+#train set
+clev.train <- clev_processed[idx==1, 1:19]
+
+#train target variable
+clev.train_target <- clev_processed[idx==1, 20]
+
+#test set
+clev.test <- clev_processed[idx==2, 1:19]
+
+#test target variable
+clev.test_target <- clev_processed[idx==2, 20]
+```
+
+### K = 1 Model
+
+```{r K = 1}
+#k = 1 model
+knn_1 <- knn(train = clev.train, test = clev.test, cl = clev.train_target, k = 1)
+
+#cross table
+CrossTable(x = clev.test_target, y = knn1, prop.chisq = F)
+```
+
+Setting k to 1, the model's accuracy is approximately 75.9 percent, its precision approximately 67.7 percent, its recall 70 percent and its F-score 68.8 percent.
+
+Using a low k value leads to noisy results and outliers have a greater impact in the performance (outliers have greater distance from the center of mass of the set).
+
+In this project, we are trying to build a model that correctly predicts whether or not a person has heart disease. It would be a mistake to classify a person with heart disease when they really do not. But it would be a worse mistake to classify a person without heart disease when they really do need treatment. There are ways to improve the performance of the model. One of the main ways it to find the optimal K value. Using a loop, the k value is incremented by one and a model is trained using the value and its performance is evaluated in the form of accuracy.
+
+### Finding Optimal K Value
+
+```{r K Loop}
+i <- 1
+
+k.opt <- 1
+
+for (i in 1:10) {
+  
+  knn.test <- knn(train = clev.train, test = clev.test, cl = clev.train_target, k = i)
+  
+  k.opt[i] <- 100 * sum(clev.test_target == knn.test) / NROW(clev.test_target)
+  
+  k <- i
+  
+  cat(k, k.opt[i], '%\n')
+}
+```
+
+The loop iterated through 10 k values (1 to 10). K value 5 performed the best (approximately 81 percent).
+
+### K = 5 Model
+
+```{r K = 5}
+#building K = 5 model
+knn_2 <- knn(train = clev.train, test = clev.test, cl = clev.train_target, k = 5)
+
+#performance
+CrossTable(x = clev.test_target, y = knn_2, prop.chisq = F)
+```
+
+Using the optimal k value improved the model's performance overall. It's accuracy increased to approximately 81.01 percent, precision increased to approximately 75.86 percent, recall increased to 73.33 percent and its F-score increased to 75.57 percent.
